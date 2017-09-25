@@ -15,3 +15,6 @@ key.json
 test.conf
 kcbq-connector/src/integration-test/resources/test.properties
 kcbq-connector/test/docker/connect/properties/
+*/*.project
+*/*.settings
+*/*.classpath
