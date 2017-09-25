@@ -23,7 +23,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Uses the Confluent Schema Registry to fetch the latest schema for a given topic.
@@ -70,13 +69,6 @@ public class SchemaRegistrySchemaRetriever implements SchemaRetriever {
           exception
       );
     }
-  }
-
-  @Override
-  public Schema retrieveSchema(TableId table, String topic, Set<Schema> schemas) {
-    // Don't care about the records' schemas, Schema Registry can let us request the most recent
-    // Schema
-    return retrieveSchema(table, topic);
   }
 
   private String getSubject(String topic) {

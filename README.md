@@ -1,30 +1,14 @@
 # Kafka Connect BigQuery Connector
 
-[![Source](https://img.shields.io/badge/source-wepay/kafka–connect–bigquery-blue.svg?style=flat-square)](https://github.com/wepay/kafka-connect-bigquery)
-[![Release](https://img.shields.io/github/release/wepay/kafka-connect-bigquery.svg?style=flat-square)](https://github.com/wepay/kafka-connect-bigquery/releases)
-[![Maven Central](https://img.shields.io/maven-central/v/com.wepay/kafka-connect-bigquery.svg?style=flat-square)](http://search.maven.org/#search%7Cgav%7C1%7Cg%3A%22com.wepay%22%20AND%20a%3A%22kafka-connect-bigquery%22)
-[![Open Issues](https://img.shields.io/github/issues/wepay/kafka-connect-bigquery.svg?style=flat-square)](https://github.com/wepay/kafka-connect-bigquery/issues)
-[![Pull Requests](https://img.shields.io/github/issues-pr/wepay/kafka-connect-bigquery.svg?style=flat-square)](https://github.com/wepay/kafka-connect-bigquery/pulls)
 [![Build Status](https://img.shields.io/travis/wepay/kafka-connect-bigquery.svg?style=flat-square)](https://travis-ci.org/wepay/kafka-connect-bigquery)
 [![Code Coverage](https://img.shields.io/codecov/c/github/wepay/kafka-connect-bigquery.svg?style=flat-square)](https://codecov.io/gh/wepay/kafka-connect-bigquery)
-[![License](https://img.shields.io/github/license/wepay/kafka-connect-bigquery.svg)](https://github.com/wepay/kafka-connect-bigquery/blob/master/LICENSE.md)
-[![Author](http://img.shields.io/badge/author-C0urante-blue.svg?style=flat-square)](https://github.com/C0urante)
-[![Author](http://img.shields.io/badge/author-mtagle-blue.svg?style=flat-square)](https://github.com/mtagle)
 
 This is an implementation of a sink connector from [Apache Kafka] to [Google BigQuery], built on top 
 of [Apache Kafka Connect].
 
-## Semantic Versioning
+## Download
 
-This project follows the versioning guidelines described by [Semantic Versioning].
-
-> Given a version number MAJOR.MINOR.PATCH, increment the:
-> 
-> * MAJOR version when you make incompatible API changes,
-> * MINOR version when you add functionality in a backwards-compatible manner, and
-> * PATCH version when you make backwards-compatible bug fixes.
-
-<http://semver.org/#faq>
+The latest releases are available in the GitHub release tab, or via [tarballs in Maven central](http://search.maven.org/#search%7Cga%7C1%7Ca%3A%22kcbq-connector%22).
 
 ## Standalone Quickstart
 
@@ -33,7 +17,7 @@ This project follows the versioning guidelines described by [Semantic Versioning
 ### Configuration Basics
 
 Firstly, you need to specify configuration settings for your connector. These can be found in the 
-`quickstart/properties/connector.properties` file. Look for this section:
+`kcbq-connector/quickstart/properties/connector.properties` file. Look for this section:
 
 ```plain
 ########################################### Fill me in! ###########################################
@@ -53,35 +37,6 @@ save the properties file.
 
 Once you get more familiar with the connector, you might want to revisit the `connector.properties`
 file and experiment with tweaking its settings.
-
-### Cherry-Picking Schema Registry Patches
-
-> **NOTE:** You can skip this step if you don't plan on using multiple topics with different names 
-but identical schemas, or the [Avro] bytes type.
-
-The connector depends on some commits in Confluent's [Schema Registry] that have not yet been 
-included in a released version. As a result, there is some external work involved in building the 
-connector. Here is what you need to do before building:
-
-1. Checkout Schema Registry locally.
-
-1. Checkout the `v3.0.0` release tag:
-
-   ```bash
-   git checkout v3.0.0
-   ```
-
-1. Cherry-pick the following two commits:
-
-   ```bash
-   git cherry-pick -m 1 f835af3a2fd97911c633c0a13c72c1d6f91dc1eb
-   git cherry-pick -m 1 b3fba7f9f8cc2a117aafa9aff8ac2f50c8dc38e9
-   ```
-
-1. Run `mvn install` in your local `schema-registry` directory to install a modified 
-   Schema Registry 3.0.0 into your local [Maven] repository.
-   
-Once a new version of Schema Registry is released, these steps should no longer be required.
    
 ### Building and Extracting a Tarball
 
@@ -108,7 +63,7 @@ $ mkdir bin/jar/ && tar -C bin/jar/ -xf bin/tar/kcbq-connector-*-confluent-dist.
 Then move into the `quickstart` directory:
 
 ```bash
-$ cd quickstart/
+$ cd kcbq-connector/quickstart/
 ```
 
 After that, if your Confluent Platform installation isn't in a sibling directory to the connector, 
@@ -169,7 +124,7 @@ Producer instance, and the pipeline instance should write them to BigQuery.
 
 If you want to get more adventurous, you can experiment with different schemas or topics by 
 adjusting flags given to the Avro Console Producer and tweaking the config settings found in the 
-`quickstart/properties` directory.
+`kcbq-connector/quickstart/properties` directory.
 
 ## Integration Testing the Connector
 

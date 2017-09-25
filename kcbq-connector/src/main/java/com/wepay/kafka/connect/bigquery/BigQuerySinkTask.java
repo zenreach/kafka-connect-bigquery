@@ -19,31 +19,24 @@ package com.wepay.kafka.connect.bigquery;
 
 
 import com.google.cloud.bigquery.BigQuery;
-import com.google.cloud.bigquery.InsertAllRequest;
 import com.google.cloud.bigquery.InsertAllRequest.RowToInsert;
 import com.google.cloud.bigquery.TableId;
 
 import com.wepay.kafka.connect.bigquery.api.SchemaRetriever;
-
-import com.wepay.kafka.connect.bigquery.buffer.Buffer;
-import com.wepay.kafka.connect.bigquery.buffer.EmptyBuffer;
-import com.wepay.kafka.connect.bigquery.buffer.LimitedBuffer;
-import com.wepay.kafka.connect.bigquery.buffer.UnlimitedBuffer;
 
 import com.wepay.kafka.connect.bigquery.config.BigQuerySinkTaskConfig;
 
 import com.wepay.kafka.connect.bigquery.convert.RecordConverter;
 import com.wepay.kafka.connect.bigquery.convert.SchemaConverter;
 
-import com.wepay.kafka.connect.bigquery.exception.BigQueryConnectException;
 import com.wepay.kafka.connect.bigquery.exception.SinkConfigConnectException;
 
-import com.wepay.kafka.connect.bigquery.utils.MetricsConstants;
+import com.wepay.kafka.connect.bigquery.utils.PartitionedTableId;
 import com.wepay.kafka.connect.bigquery.utils.TopicToTableResolver;
 import com.wepay.kafka.connect.bigquery.utils.Version;
 
-import com.wepay.kafka.connect.bigquery.write.batch.BatchWriter;
-
+import com.wepay.kafka.connect.bigquery.write.batch.KCBQThreadPoolExecutor;
+import com.wepay.kafka.connect.bigquery.write.batch.TableWriter;
 import com.wepay.kafka.connect.bigquery.write.row.AdaptiveBigQueryWriter;
 import com.wepay.kafka.connect.bigquery.write.row.BigQueryWriter;
 import com.wepay.kafka.connect.bigquery.write.row.SimpleBigQueryWriter;
@@ -53,13 +46,6 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.config.ConfigException;
 
-import org.apache.kafka.common.metrics.Metrics;
-import org.apache.kafka.common.metrics.Sensor;
-import org.apache.kafka.common.metrics.stats.Avg;
-import org.apache.kafka.common.metrics.stats.Max;
-import org.apache.kafka.common.metrics.stats.Rate;
-
-import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
@@ -67,19 +53,12 @@ import org.apache.kafka.connect.sink.SinkTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.Set;
+import java.util.concurrent.LinkedBlockingQueue;
 
 /**
  * A {@link SinkTask} used to translate Kafka Connect {@link SinkRecord SinkRecords} into BigQuery
@@ -88,20 +67,15 @@ import java.util.concurrent.Future;
 public class BigQuerySinkTask extends SinkTask {
   private static final Logger logger = LoggerFactory.getLogger(BigQuerySinkTask.class);
 
-  private final ExecutorService executorService = Executors.newCachedThreadPool();
-
-  private final Object contextLock = new Object();
-
   private final BigQuery testBigQuery;
+  private BigQueryWriter bigQueryWriter;
   private BigQuerySinkTaskConfig config;
   private RecordConverter<Map<String, Object>> recordConverter;
-  private Map<TableId, Buffer<RowToInsert>> tableBuffers;
-  private Map<TableId, Set<Schema>> tableSchemas;
-  private BatchWriterManager batchWriterManager;
-  private Map<TableId, String> tableIdsToTopics;
-  private Map<String, TableId> topicsToTableIds;
-  private Metrics metrics;
-  private Sensor rowsRead;
+  private Map<String, TableId> topicsToBaseTableIds;
+
+  private TopicPartitionManager topicPartitionManager;
+
+  private KCBQThreadPoolExecutor executor;
 
   public BigQuerySinkTask() {
     testBigQuery = null;
@@ -112,141 +86,38 @@ public class BigQuerySinkTask extends SinkTask {
     this.testBigQuery = testBigQuery;
   }
 
-  // Called asynchronously from TableWriter.call(); synchronization required on context
-  private void updateAllPartitions(String topic, Map<TopicPartition, OffsetAndMetadata> offsets) {
-    Map<TopicPartition, Long> topicOffsets = new HashMap<>();
-    for (Map.Entry<TopicPartition, OffsetAndMetadata> topicPartitionOffset : offsets.entrySet()) {
-      TopicPartition topicPartition = topicPartitionOffset.getKey();
-      if (topicPartition.topic().equals(topic)) {
-        topicOffsets.put(topicPartition, topicPartitionOffset.getValue().offset());
-      }
+  @Override
+  public void flush(Map<TopicPartition, OffsetAndMetadata> offsets) {
+    try {
+      executor.awaitCurrentTasks();
+    } catch (InterruptedException err) {
+      throw new ConnectException("Interrupted while waiting for write tasks to complete.", err);
     }
-    if (!topicOffsets.isEmpty()) {
-      synchronized (contextLock) {
-        context.offset(topicOffsets);
-      }
-    }
-  }
+    updateOffsets(offsets);
 
-  private class TableWriter implements Callable<Void> {
-    private final TableId table;
-    private final List<RowToInsert> rows;
-    private final Map<TopicPartition, OffsetAndMetadata> offsets;
-    private final String topic;
-    private final Set<Schema> schemas;
-    private final BatchWriter<RowToInsert> batchWriter;
-
-    public TableWriter(TableId table,
-                       List<RowToInsert> rows,
-                       Map<TopicPartition, OffsetAndMetadata> offsets,
-                       String topic,
-                       Set<Schema> schemas) {
-      this.table = table;
-      this.rows = rows;
-      this.offsets = offsets;
-      this.topic = topic;
-      this.schemas = schemas;
-      this.batchWriter = batchWriterManager.getBatchWriter(table);
-    }
-
-    @Override
-    public Void call() throws InterruptedException {
-      batchWriter.writeAll(table, rows, topic, schemas);
-      updateAllPartitions(tableIdsToTopics.get(table), offsets);
-      return null;
-    }
+    topicPartitionManager.resumeAll();
   }
 
   /**
-   * A class for keeping track of the BatchWriters for each table.
+   * This really doesn't do much and I'm not totally clear on whether or not I need it.
+   * But, in the interest of maintaining old functionality, here we are.
    */
-  private static class BatchWriterManager {
-    private final BigQueryWriter bigQueryWriter;
-    private final Class<BatchWriter<InsertAllRequest.RowToInsert>> batchWriterClass;
-    private Map<TableId, BatchWriter<RowToInsert>> batchWriterMap;
-
-    /**
-     * @param bigQueryWriter the {@link BigQueryWriter} to use to call BigQuery.
-     * @param batchWriterClass the class of the BatchWriter to use
-     * @param numTables the number of tables we are expecting to write to.
-     */
-    public BatchWriterManager(BigQueryWriter bigQueryWriter,
-                              Class<BatchWriter<InsertAllRequest.RowToInsert>> batchWriterClass,
-                              int numTables) {
-      this.bigQueryWriter = bigQueryWriter;
-      this.batchWriterClass = batchWriterClass;
-      batchWriterMap = new HashMap<>(numTables);
-    }
-
-    public synchronized BatchWriter<RowToInsert> getBatchWriter(TableId tableId) {
-      if (!batchWriterMap.containsKey(tableId)) {
-        addNewBatchWriter(tableId);
-      }
-      return batchWriterMap.get(tableId);
-    }
-
-    private void addNewBatchWriter(TableId tableId) {
-      BatchWriter<RowToInsert> batchWriter;
-      try {
-        batchWriter = batchWriterClass.newInstance();
-        batchWriter.init(bigQueryWriter);
-      } catch (InstantiationException
-        | IllegalAccessException
-        exception) {
-        throw new ConfigException("Failed to instantiate class specified for BatchWriter",
-          exception);
-      }
-      batchWriterMap.put(tableId, batchWriter);
+  private void updateOffsets(Map<TopicPartition, OffsetAndMetadata> offsets) {
+    for (Map.Entry<TopicPartition, OffsetAndMetadata> offsetEntry : offsets.entrySet()) {
+      context.offset(offsetEntry.getKey(), offsetEntry.getValue().offset());
     }
   }
 
-  // Called synchronously from flush(); no synchronization required on context
-  private void resumeAllPartitions() {
-    logger.debug("Resuming all partitions");
-    for (TopicPartition topicPartition : context.assignment()) {
-      context.resume(topicPartition);
-    }
-  }
-
-  @Override
-  public void flush(Map<TopicPartition, OffsetAndMetadata> offsets) {
-    List<TableWriter> tableWriters = new ArrayList<>();
-    for (Map.Entry<TableId, Buffer<RowToInsert>> bufferEntry : tableBuffers.entrySet()) {
-      TableId table = bufferEntry.getKey();
-      Buffer<RowToInsert> buffer = bufferEntry.getValue();
-      if (buffer.hasAny()) {
-        tableWriters.add(
-            new TableWriter(
-                table,
-                buffer.getAll(),
-                offsets,
-                tableIdsToTopics.get(table),
-                tableSchemas.get(table)
-            )
-        );
-      }
-      tableSchemas.put(table, new HashSet<>());
-    }
-    if (!tableWriters.isEmpty()) {
-      try {
-        for (Future<Void> tableWriteResult : executorService.invokeAll(tableWriters)) {
-          tableWriteResult.get();
-        }
-      } catch (InterruptedException err) {
-        throw new ConnectException("Interrupted while scheduling/executing write threads", err);
-      } catch (ExecutionException err) {
-        throw new BigQueryConnectException("Exception occurred while executing write threads", err);
-      }
-    }
-    resumeAllPartitions();
-  }
-
-  private TableId getRecordTable(SinkRecord record) {
-    return TopicToTableResolver.getPartitionedTableName(topicsToTableIds.get(record.topic()));
+  private PartitionedTableId getRecordTable(SinkRecord record) {
+    TableId baseTableId = topicsToBaseTableIds.get(record.topic());
+    return new PartitionedTableId.Builder(baseTableId).setDayPartitionForNow().build();
   }
 
   private String getRowId(SinkRecord record) {
-    return String.format("%s-%d-%d", record.topic(), record.kafkaPartition(), record.kafkaOffset());
+    return String.format("%s-%d-%d",
+                         record.topic(),
+                         record.kafkaPartition(),
+                         record.kafkaOffset());
   }
 
   private RowToInsert getRecordRow(SinkRecord record) {
@@ -256,94 +127,44 @@ public class BigQuerySinkTask extends SinkTask {
     );
   }
 
-  private Buffer<RowToInsert> getNewBuffer() {
-    long bufferSize = config.getLong(config.BUFFER_SIZE_CONFIG);
-    if (bufferSize == -1) {
-      return new UnlimitedBuffer<>();
-    } else if (bufferSize == 0) {
-      return new EmptyBuffer<>();
-    } else {
-      return new LimitedBuffer<>(bufferSize);
-    }
-  }
-
-  private Map<TableId, List<SinkRecord>> partitionRecordsByTable(Collection<SinkRecord> records) {
-    Map<TableId, List<SinkRecord>> tableRecords = new HashMap<>();
-    for (SinkRecord record : records) {
-      if (recordEmpty(record)) {
-        // ignore it
-        logger.debug("ignoring empty record value for topic: " + record.topic());
-        continue;
-      }
-      TableId tableId = getRecordTable(record);
-      if (!tableRecords.containsKey(tableId)) {
-        tableRecords.put(tableId, new ArrayList<>());
-      }
-      tableRecords.get(tableId).add(record);
-    }
-    return tableRecords;
-  }
-
-  // Called synchronously in put(); no synchronization on context needed
-  private void pauseAllPartitions(String topic) {
-    logger.debug("Pausing all partitions for topic: " + topic);
-    for (TopicPartition topicPartition : context.assignment()) {
-      if (topicPartition.topic().equals(topic)) {
-        context.pause(topicPartition);
-      }
-    }
-  }
-
   @Override
   public void put(Collection<SinkRecord> records) {
-    Map<TableId, List<SinkRecord>> partitionedRecords = partitionRecordsByTable(records);
-    for (Map.Entry<TableId, List<SinkRecord>> tableRecords : partitionedRecords.entrySet()) {
-      TableId table = tableRecords.getKey();
 
-      if (!tableBuffers.containsKey(table)) {
-        tableBuffers.put(table, getNewBuffer());
-      }
+    // create tableWriters
+    Map<PartitionedTableId, TableWriter.Builder> tableWriterBuilders = new HashMap<>();
 
-      if (!tableSchemas.containsKey(table)) {
-        tableSchemas.put(table, new HashSet<>());
-      }
-
-      Buffer<RowToInsert> buffer = tableBuffers.get(table);
-      Set<Schema> schemas = tableSchemas.get(table);
-
-      List<RowToInsert> tableRows = new ArrayList<>();
-      for (SinkRecord record : tableRecords.getValue()) {
-        schemas.add(record.valueSchema());
-        tableRows.add(getRecordRow(record));
-      }
-
-      buffer.buffer(tableRows);
-      if (buffer.hasExcess()) {
-        pauseAllPartitions(tableIdsToTopics.get(table));
+    for (SinkRecord record : records) {
+      if (record.value() != null) {
+        PartitionedTableId table = getRecordTable(record);
+        if (!tableWriterBuilders.containsKey(table)) {
+          TableWriter.Builder tableWriterBuilder =
+              new TableWriter.Builder(bigQueryWriter, table, record.topic());
+          tableWriterBuilders.put(table, tableWriterBuilder);
+        }
+        tableWriterBuilders.get(table).addRow(getRecordRow(record));
       }
     }
-    rowsRead.record(records.size());
-  }
 
-  /**
-   * Returns true if the given {@link SinkRecord} contains no value.
-   * @param record the {@link SinkRecord} to check.
-   * @return true if the record has no value, false otherwise.
-   */
-  private boolean recordEmpty(SinkRecord record) {
-    return record.value() == null;
+    // add tableWriters to the executor work queue
+    for (TableWriter.Builder builder : tableWriterBuilders.values()) {
+      executor.execute(builder.build());
+    }
+
+    // check if we should pause topics
+    long queueSoftLimit = config.getLong(BigQuerySinkTaskConfig.QUEUE_SIZE_CONFIG);
+    if (queueSoftLimit != -1) {
+      int currentQueueSize = executor.getQueue().size();
+      if (currentQueueSize > queueSoftLimit) {
+        topicPartitionManager.pauseAll();
+      } else if (currentQueueSize <= queueSoftLimit / 2) {
+        // resume only if there is a reasonable chance we won't immediately have to pause again.
+        topicPartitionManager.resumeAll();
+      }
+    }
   }
 
   private RecordConverter<Map<String, Object>> getConverter() {
     return config.getRecordConverter();
-  }
-
-  private BatchWriterManager getBatchWriterManager() {
-    @SuppressWarnings("unchecked")
-    Class<BatchWriter<InsertAllRequest.RowToInsert>> batchWriterClass =
-        (Class<BatchWriter<RowToInsert>>) config.getClass(config.BATCH_WRITER_CONFIG);
-
-    return new BatchWriterManager(getBigQueryWriter(), batchWriterClass, tableSchemas.size());
   }
 
   private BigQuery getBigQuery() {
@@ -371,31 +192,11 @@ public class BigQuerySinkTask extends SinkTask {
       return new AdaptiveBigQueryWriter(bigQuery,
                                         getSchemaManager(bigQuery),
                                         retry,
-                                        retryWait,
-                                        metrics);
+                                        retryWait);
     } else {
-      return new SimpleBigQueryWriter(bigQuery, retry, retryWait, metrics);
+      return new SimpleBigQueryWriter(bigQuery, retry, retryWait);
     }
   }
-
-  private void configureMetrics() {
-    metrics = new Metrics();
-    rowsRead = metrics.sensor("rows-read");
-    rowsRead.add(metrics.metricName("rows-read-avg",
-                                    MetricsConstants.groupName,
-                                    "The average number of rows written per request"),
-                 new Avg());
-    rowsRead.add(metrics.metricName("rows-read-max",
-                                    MetricsConstants.groupName,
-                                    "The maximum number of rows written per request"),
-                 new Max());
-    rowsRead.add(metrics.metricName("rows-read-rate",
-                                    MetricsConstants.groupName,
-                                    "The average number of rows written per second"),
-                 new Rate());
-  }
-
-
 
   @Override
   public void start(Map<String, String> properties) {
@@ -409,14 +210,11 @@ public class BigQuerySinkTask extends SinkTask {
       );
     }
 
-    configureMetrics();
-
-    topicsToTableIds = TopicToTableResolver.getTopicsToTables(config);
-    tableIdsToTopics = TopicToTableResolver.getTablesToTopics(config);
+    bigQueryWriter = getBigQueryWriter();
+    topicsToBaseTableIds = TopicToTableResolver.getTopicsToTables(config);
     recordConverter = getConverter();
-    tableBuffers = new HashMap<>();
-    tableSchemas = new HashMap<>();
-    batchWriterManager = getBatchWriterManager();
+    executor = new KCBQThreadPoolExecutor(config, new LinkedBlockingQueue<>());
+    topicPartitionManager = new TopicPartitionManager();
   }
 
   @Override
@@ -429,5 +227,38 @@ public class BigQuerySinkTask extends SinkTask {
     String version = Version.version();
     logger.trace("task.version() = {}", version);
     return version;
+  }
+
+  private class TopicPartitionManager {
+
+    private Long lastChangeMs;
+    private boolean isPaused;
+
+    public TopicPartitionManager() {
+      this.lastChangeMs = System.currentTimeMillis();
+      this.isPaused = false;
+    }
+
+    public void pauseAll() {
+      if (!isPaused) {
+        long now = System.currentTimeMillis();
+        logger.warn("Paused all partitions after {}ms", now - lastChangeMs);
+        isPaused = true;
+        lastChangeMs = now;
+      }
+      Set<TopicPartition> assignment = context.assignment();
+      context.pause(assignment.toArray(new TopicPartition[assignment.size()]));
+    }
+
+    public void resumeAll() {
+      if (isPaused) {
+        long now = System.currentTimeMillis();
+        logger.info("Resumed all partitions after {}ms", now - lastChangeMs);
+        isPaused = false;
+        lastChangeMs = now;
+      }
+      Set<TopicPartition> assignment = context.assignment();
+      context.resume(assignment.toArray(new TopicPartition[assignment.size()]));
+    }
   }
 }

@@ -25,13 +25,9 @@ import com.wepay.kafka.connect.bigquery.SinkPropertiesFactory;
 import com.wepay.kafka.connect.bigquery.config.BigQuerySinkConfig;
 
 import org.apache.kafka.common.config.ConfigException;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.time.LocalDate;
-import java.util.Calendar;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -54,7 +50,7 @@ public class TopicToTableResolverTest {
     );
     configProperties.put(
         BigQuerySinkConfig.TOPICS_CONFIG,
-        "sanitize-me,db_debezium_identity_profiles_info,db.core.cluster-0.users"
+        "sanitize-me,db_debezium_identity_profiles_info.foo,db.core.cluster-0.users"
     );
     configProperties.put(
         BigQuerySinkConfig.TOPICS_TO_TABLES_CONFIG,
@@ -62,7 +58,8 @@ public class TopicToTableResolverTest {
     );
     Map<String, TableId> expectedTopicsToTables = new HashMap<>();
     expectedTopicsToTables.put("sanitize-me", TableId.of("scratch", "sanitize_me"));
-    expectedTopicsToTables.put("db_debezium_identity_profiles_info", TableId.of("scratch", "info"));
+    expectedTopicsToTables.put("db_debezium_identity_profiles_info.foo",
+        TableId.of("scratch", "info_foo"));
     expectedTopicsToTables.put("db.core.cluster-0.users", TableId.of("scratch", "core_users"));
 
     BigQuerySinkConfig testConfig = new BigQuerySinkConfig(configProperties);
@@ -112,28 +109,14 @@ public class TopicToTableResolverTest {
   }
 
   @Test
-  public void testGetPartitionedTableNames() {
-    TableId baseTableId = TableId.of("dataset", "table");
-
-    LocalDate localDate = LocalDate.of(2016, 10, 14);
-
-    TableId partitionedTableId = TopicToTableResolver.getPartitionedTableName(baseTableId,
-                                                                              localDate);
-
-    String expectedTableName = "table" + "$" + "2016" + "10" + "14";
-    Assert.assertEquals(baseTableId.project(), partitionedTableId.project());
-    Assert.assertEquals(baseTableId.dataset(), partitionedTableId.dataset());
-    Assert.assertEquals(expectedTableName, partitionedTableId.table());
-  }
-
-  @Test
-  public void testTablesToTopics() {
+  public void testBaseTablesToTopics() {
     Map<String, String> configProperties = propertiesFactory.getProperties();
     configProperties.put(BigQuerySinkConfig.SANITIZE_TOPICS_CONFIG, "true");
     configProperties.put(BigQuerySinkConfig.DATASETS_CONFIG, ".*=scratch");
     configProperties.put(BigQuerySinkConfig.TOPICS_CONFIG, "sanitize-me,leave_me_alone");
     BigQuerySinkConfig testConfig = new BigQuerySinkConfig(configProperties);
-    Map<TableId, String> testTablesToSchemas = TopicToTableResolver.getTablesToTopics(testConfig);
+    Map<TableId, String> testTablesToSchemas =
+        TopicToTableResolver.getBaseTablesToTopics(testConfig);
     Map<TableId, String> expectedTablesToSchemas = new HashMap<>();
     expectedTablesToSchemas.put(TableId.of("scratch", "sanitize_me"), "sanitize-me");
     expectedTablesToSchemas.put(TableId.of("scratch", "leave_me_alone"), "leave_me_alone");

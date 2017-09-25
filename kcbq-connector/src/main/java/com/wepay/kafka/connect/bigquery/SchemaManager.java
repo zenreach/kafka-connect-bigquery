@@ -11,8 +11,6 @@ import com.wepay.kafka.connect.bigquery.convert.SchemaConverter;
 
 import org.apache.kafka.connect.data.Schema;
 
-import java.util.Set;
-
 /**
  * Class for managing Schemas of BigQuery tables (creating and updating).
  */
@@ -50,10 +48,9 @@ public class SchemaManager {
    * Update an existing table in BigQuery.
    * @param table The BigQuery table to update.
    * @param topic The Kafka topic used to determine the schema.
-   * @param schemas The Kafka Connect schemas recently used in an attempt to write to BigQuery.
    */
-  public void updateSchema(TableId table, String topic, Set<Schema> schemas) {
-    Schema kafkaConnectSchema = schemaRetriever.retrieveSchema(table, topic, schemas);
+  public void updateSchema(TableId table, String topic) {
+    Schema kafkaConnectSchema = schemaRetriever.retrieveSchema(table, topic);
     bigQuery.update(constructTableInfo(table, kafkaConnectSchema));
   }
 
@@ -61,14 +58,14 @@ public class SchemaManager {
   TableInfo constructTableInfo(TableId table, Schema kafkaConnectSchema) {
     com.google.cloud.bigquery.Schema bigQuerySchema =
         schemaConverter.convertSchema(kafkaConnectSchema);
-    StandardTableDefinition tableDefinition = StandardTableDefinition.builder()
-        .schema(bigQuerySchema)
-        .timePartitioning(TimePartitioning.of(TimePartitioning.Type.DAY))
+    StandardTableDefinition tableDefinition = StandardTableDefinition.newBuilder()
+        .setSchema(bigQuerySchema)
+        .setTimePartitioning(TimePartitioning.of(TimePartitioning.Type.DAY))
         .build();
     TableInfo.Builder tableInfoBuilder =
-        TableInfo.builder(table, tableDefinition);
+        TableInfo.newBuilder(table, tableDefinition);
     if (kafkaConnectSchema.doc() != null) {
-      tableInfoBuilder.description(kafkaConnectSchema.doc());
+      tableInfoBuilder.setDescription(kafkaConnectSchema.doc());
     }
     return tableInfoBuilder.build();
   }

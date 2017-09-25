@@ -25,14 +25,12 @@ import com.google.cloud.bigquery.InsertAllResponse;
 import com.wepay.kafka.connect.bigquery.config.BigQuerySinkTaskConfig;
 import com.wepay.kafka.connect.bigquery.exception.BigQueryConnectException;
 
-import org.apache.kafka.common.metrics.Metrics;
-import org.apache.kafka.connect.data.Schema;
+import com.wepay.kafka.connect.bigquery.utils.PartitionedTableId;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Set;
-
+import java.util.List;
 
 /**
  * A simple BigQueryWriter implementation. Sends the request to BigQuery, and throws an exception if
@@ -47,30 +45,32 @@ public class SimpleBigQueryWriter extends BigQueryWriter {
    * @param bigQuery The object used to send write requests to BigQuery.
    * @param retry How many retries to make in the event of a 500/503 error.
    * @param retryWait How long to wait in between retries.
-   * @param metrics Metrics for kcbq.
    */
-  public SimpleBigQueryWriter(BigQuery bigQuery, int retry, long retryWait, Metrics metrics) {
-    super(retry, retryWait, metrics);
+  public SimpleBigQueryWriter(BigQuery bigQuery, int retry, long retryWait) {
+    super(retry, retryWait);
     this.bigQuery = bigQuery;
   }
 
   /**
    * Sends the request to BigQuery, and throws an exception if any errors occur as a result of doing
    * so.
-   * @param request The request to send to BigQuery.
+   * @param tableId The PartitionedTableId.
+   * @param rows The rows to write.
    * @param topic The Kafka topic that the row data came from (ignored).
-   * @param schemas The unique Schemas for the row data (ignored).
    */
   @Override
-  public void performWriteRequest(InsertAllRequest request, String topic, Set<Schema> schemas) {
+  public void performWriteRequest(PartitionedTableId tableId,
+                                  List<InsertAllRequest.RowToInsert> rows,
+                                  String topic) {
+    InsertAllRequest request = createInsertAllRequest(tableId, rows);
     InsertAllResponse writeResponse = bigQuery.insertAll(request);
     if (writeResponse.hasErrors()) {
       logger.warn(
-          "You may want to enable auto schema updates by specifying"
+          "You may want to enable auto schema updates by specifying "
           + "{}=true in the properties file",
           BigQuerySinkTaskConfig.SCHEMA_UPDATE_CONFIG
       );
-      throw new BigQueryConnectException(writeResponse.insertErrors());
+      throw new BigQueryConnectException(writeResponse.getInsertErrors());
     } else {
       logger.debug("table insertion completed with no reported errors");
     }

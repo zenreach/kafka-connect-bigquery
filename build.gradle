@@ -49,10 +49,6 @@ subprojects { subproject ->
         }
     }
 
-    findbugs {
-        excludeFilter = file("${rootDir}/config/findbugs/exclude.xml")
-    }
-
     uploadArchives {
         repositories {
             mavenDeployer {
@@ -169,7 +165,7 @@ project(':kcbq-connector') {
 
     javadoc {
         options.links 'http://docs.oracle.com/javase/8/docs/api/'
-        options.links 'http://docs.confluent.io/3.0.0/connect/javadocs/'
+        options.links 'http://docs.confluent.io/3.2.0/connect/javadocs/'
         options.links 'http://googlecloudplatform.github.io/google-cloud-java/0.2.7/apidocs/'
         options.links 'https://kafka.apache.org/0100/javadoc/'
         options.links 'https://avro.apache.org/docs/1.8.1/api/java/'
@@ -185,10 +181,13 @@ project(':kcbq-connector') {
     dependencies {
         compile project(':kcbq-api')
 
-        compile group: 'com.google.cloud', name: 'gcloud-java', version: '0.2.7'
+        compile group: 'com.google.cloud', name: 'google-cloud', version: '0.10.0-alpha'
+        compile group: 'com.google.auth', name: 'google-auth-library-oauth2-http', version: '0.6.0'
 
-        compile group: 'org.apache.kafka', name: 'connect-api', version: '0.10.0.0'
-        compile group: 'org.apache.kafka', name: 'kafka-clients', version: '0.10.0.0'
+        compile group: 'io.debezium', name: 'debezium-core',  version:'0.4.0'
+
+        compile group: 'org.apache.kafka', name: 'connect-api', version: '0.10.2.1'
+        compile group: 'org.apache.kafka', name: 'kafka-clients', version: '0.10.2.1'
 
         compile group: 'org.slf4j', name: 'slf4j-api', version: '1.6.1'
         compile group: 'org.slf4j', name: 'slf4j-simple', version: '1.6.1'
@@ -229,13 +228,13 @@ project('kcbq-api') {
 
     javadoc {
         options.links 'http://docs.oracle.com/javase/8/docs/api/'
-        options.links 'http://docs.confluent.io/3.0.0/connect/javadocs/'
+        options.links 'http://docs.confluent.io/3.2.0/connect/javadocs/'
     }
 
     dependencies {
-        compile group: 'com.google.cloud', name: 'gcloud-java', version: '0.2.7'
+        compile group: 'com.google.cloud', name: 'google-cloud', version: '0.10.0-alpha'
 
-        compile group: 'org.apache.kafka', name: 'connect-api', version: '0.10.0.0'
+        compile group: 'org.apache.kafka', name: 'connect-api', version: '0.10.2.1'
     }
 
     artifacts {
@@ -265,7 +264,6 @@ project('kcbq-confluent') {
     }
 
     repositories {
-        mavenLocal()
         mavenCentral()
         maven {
             url 'http://packages.confluent.io/maven'
@@ -275,21 +273,21 @@ project('kcbq-confluent') {
 
     javadoc {
         options.links 'http://docs.oracle.com/javase/8/docs/api/'
-        options.links 'http://docs.confluent.io/3.0.0/connect/javadocs/'
+        options.links 'http://docs.confluent.io/3.2.0/connect/javadocs/'
     }
 
     dependencies {
         compile project(':kcbq-api')
 
-        compile group: 'com.google.cloud', name: 'gcloud-java', version: '0.2.7'
+        compile group: 'com.google.cloud', name: 'google-cloud', version: '0.10.0-alpha'
 
-        compile group: 'io.confluent', name: 'kafka-connect-avro-converter', version: '3.0.0'
-        compile group: 'io.confluent', name: 'kafka-schema-registry-client', version: '3.0.0'
+        compile group: 'io.confluent', name: 'kafka-connect-avro-converter', version: '3.2.0'
+        compile group: 'io.confluent', name: 'kafka-schema-registry-client', version: '3.2.0'
 
         compile group: 'org.apache.avro', name: 'avro', version: '1.8.1'
 
-        compile group: 'org.apache.kafka', name: 'connect-api', version: '0.10.0.0'
-        compile group: 'org.apache.kafka', name: 'kafka-clients', version: '0.10.0.0'
+        compile group: 'org.apache.kafka', name: 'connect-api', version: '0.10.2.1'
+        compile group: 'org.apache.kafka', name: 'kafka-clients', version: '0.10.2.1'
 
         compile group: 'org.slf4j', name: 'slf4j-api', version: '1.6.1'
 

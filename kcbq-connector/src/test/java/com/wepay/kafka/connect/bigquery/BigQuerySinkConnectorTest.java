@@ -49,7 +49,6 @@ import org.junit.Test;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 public class BigQuerySinkConnectorTest {
   private static SinkConnectorPropertiesFactory propertiesFactory;
@@ -63,12 +62,6 @@ public class BigQuerySinkConnectorTest {
 
     @Override
     public Schema retrieveSchema(TableId table, String topic) {
-      // Shouldn't be called
-      return null;
-    }
-
-    @Override
-    public Schema retrieveSchema(TableId table, String topic, Set<Schema> schemas) {
       // Shouldn't be called
       return null;
     }

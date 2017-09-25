@@ -20,12 +20,9 @@ package com.wepay.kafka.connect.bigquery;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.fail;
-
 import static org.mockito.Matchers.any;
-
 import static org.mockito.Matchers.anyObject;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -39,17 +36,13 @@ import com.google.cloud.bigquery.TableId;
 
 import com.wepay.kafka.connect.bigquery.config.BigQuerySinkConfig;
 import com.wepay.kafka.connect.bigquery.config.BigQuerySinkTaskConfig;
-
 import com.wepay.kafka.connect.bigquery.exception.BigQueryConnectException;
 import com.wepay.kafka.connect.bigquery.exception.SinkConfigConnectException;
 
-import com.wepay.kafka.connect.bigquery.write.batch.SingleBatchWriter;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
-
 import org.apache.kafka.connect.errors.ConnectException;
-
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTaskContext;
 
@@ -72,17 +65,23 @@ public class BigQuerySinkTaskTest {
     final String topic = "test-topic";
 
     Map<String, String> properties = propertiesFactory.getProperties();
-    properties.put(BigQuerySinkTaskConfig.BUFFER_SIZE_CONFIG, "-1");
     properties.put(BigQuerySinkConfig.TOPICS_CONFIG, topic);
     properties.put(BigQuerySinkConfig.DATASETS_CONFIG, ".*=scratch");
 
     BigQuery bigQuery = mock(BigQuery.class);
+    SinkTaskContext sinkTaskContext = mock(SinkTaskContext.class);
+    InsertAllResponse insertAllResponse = mock(InsertAllResponse.class);
+
+    when(bigQuery.insertAll(anyObject())).thenReturn(insertAllResponse);
+    when(insertAllResponse.hasErrors()).thenReturn(false);
 
     BigQuerySinkTask testTask = new BigQuerySinkTask(bigQuery);
+    testTask.initialize(sinkTaskContext);
     testTask.start(properties);
 
     testTask.put(Collections.singletonList(spoofSinkRecord(topic)));
-    verify(bigQuery, never()).insertAll(any(InsertAllRequest.class));
+    testTask.flush(Collections.emptyMap());
+    verify(bigQuery, times(1)).insertAll(any(InsertAllRequest.class));
   }
 
   @Test
@@ -96,6 +95,7 @@ public class BigQuerySinkTaskTest {
     testTask.put(Collections.emptyList());
   }
 
+  // needed because debezium sends null messages when deleting messages in kafka
   @Test
   public void testEmptyRecordPut() {
     final String topic = "test_topic";
@@ -124,9 +124,6 @@ public class BigQuerySinkTaskTest {
     final String topic = "test_topic";
 
     Map<String, String> properties = propertiesFactory.getProperties();
-    properties.put(BigQuerySinkTaskConfig.BUFFER_SIZE_CONFIG, "-1");
-    properties.put(BigQuerySinkTaskConfig.BATCH_WRITER_CONFIG,
-                   SingleBatchWriter.class.getCanonicalName());
     properties.put(BigQuerySinkConfig.TOPICS_CONFIG, topic);
     properties.put(BigQuerySinkConfig.DATASETS_CONFIG, String.format(".*=%s", dataset));
 
@@ -135,7 +132,6 @@ public class BigQuerySinkTaskTest {
         .thenThrow(new RuntimeException("This is a test"));
 
     SinkTaskContext sinkTaskContext = mock(SinkTaskContext.class);
-    when(sinkTaskContext.assignment()).thenReturn(Collections.emptySet());
     BigQuerySinkTask testTask = new BigQuerySinkTask(bigQuery);
     testTask.initialize(sinkTaskContext);
     testTask.start(properties);
@@ -156,12 +152,11 @@ public class BigQuerySinkTaskTest {
     BigQuery bigQuery = mock(BigQuery.class);
 
     SinkTaskContext sinkTaskContext = mock(SinkTaskContext.class);
-    when(sinkTaskContext.assignment()).thenReturn(Collections.emptySet());
     BigQuerySinkTask testTask = new BigQuerySinkTask(bigQuery);
     testTask.initialize(sinkTaskContext);
     testTask.start(properties);
 
-    testTask.flush(null);
+    testTask.flush(Collections.emptyMap());
   }
 
   @Test
@@ -170,7 +165,7 @@ public class BigQuerySinkTaskTest {
     final String dataset = "scratch";
 
     Map<String, String> properties = propertiesFactory.getProperties();
-    properties.put(BigQuerySinkTaskConfig.BIGQUERY_RETRY_CONFIG, "1");
+    properties.put(BigQuerySinkTaskConfig.BIGQUERY_RETRY_CONFIG, "3");
     properties.put(BigQuerySinkTaskConfig.BIGQUERY_RETRY_WAIT_CONFIG, "2000");
     properties.put(BigQuerySinkConfig.TOPICS_CONFIG, topic);
     properties.put(BigQuerySinkConfig.DATASETS_CONFIG, String.format(".*=%s", dataset));
@@ -180,11 +175,12 @@ public class BigQuerySinkTaskTest {
     InsertAllResponse insertAllResponse = mock(InsertAllResponse.class);
     when(bigQuery.insertAll(anyObject()))
         .thenThrow(new BigQueryException(500, "mock 500"))
+        .thenThrow(new BigQueryException(502, "mock 502"))
+        .thenThrow(new BigQueryException(503, "mock 503"))
         .thenReturn(insertAllResponse);
     when(insertAllResponse.hasErrors()).thenReturn(false);
 
     SinkTaskContext sinkTaskContext = mock(SinkTaskContext.class);
-    when(sinkTaskContext.assignment()).thenReturn(Collections.emptySet());
 
     BigQuerySinkTask testTask = new BigQuerySinkTask(bigQuery);
     testTask.initialize(sinkTaskContext);
@@ -192,7 +188,7 @@ public class BigQuerySinkTaskTest {
     testTask.put(Collections.singletonList(spoofSinkRecord(topic)));
     testTask.flush(Collections.emptyMap());
 
-    verify(bigQuery, times(2)).insertAll(anyObject());
+    verify(bigQuery, times(4)).insertAll(anyObject());
   }
 
   @Test
@@ -201,7 +197,7 @@ public class BigQuerySinkTaskTest {
     final String dataset = "scratch";
 
     Map<String, String> properties = propertiesFactory.getProperties();
-    properties.put(BigQuerySinkTaskConfig.BIGQUERY_RETRY_CONFIG, "1");
+    properties.put(BigQuerySinkTaskConfig.BIGQUERY_RETRY_CONFIG, "2");
     properties.put(BigQuerySinkTaskConfig.BIGQUERY_RETRY_WAIT_CONFIG, "2000");
     properties.put(BigQuerySinkConfig.TOPICS_CONFIG, topic);
     properties.put(BigQuerySinkConfig.DATASETS_CONFIG, String.format(".*=%s", dataset));
@@ -210,13 +206,14 @@ public class BigQuerySinkTaskTest {
 
     InsertAllResponse insertAllResponse = mock(InsertAllResponse.class);
     BigQueryError quotaExceededError = new BigQueryError("quotaExceeded", null, null);
+    BigQueryError rateLimitExceededError = new BigQueryError("rateLimitExceeded", null, null);
     when(bigQuery.insertAll(anyObject()))
         .thenThrow(new BigQueryException(403, "mock quota exceeded", quotaExceededError))
+        .thenThrow(new BigQueryException(403, "mock rate limit exceeded", rateLimitExceededError))
         .thenReturn(insertAllResponse);
     when(insertAllResponse.hasErrors()).thenReturn(false);
 
     SinkTaskContext sinkTaskContext = mock(SinkTaskContext.class);
-    when(sinkTaskContext.assignment()).thenReturn(Collections.emptySet());
 
     BigQuerySinkTask testTask = new BigQuerySinkTask(bigQuery);
     testTask.initialize(sinkTaskContext);
@@ -224,7 +221,7 @@ public class BigQuerySinkTaskTest {
     testTask.put(Collections.singletonList(spoofSinkRecord(topic)));
     testTask.flush(Collections.emptyMap());
 
-    verify(bigQuery, times(2)).insertAll(anyObject());
+    verify(bigQuery, times(3)).insertAll(anyObject());
   }
 
   @Test(expected = BigQueryConnectException.class)
@@ -247,7 +244,6 @@ public class BigQuerySinkTaskTest {
     when(insertAllResponse.hasErrors()).thenReturn(false);
 
     SinkTaskContext sinkTaskContext = mock(SinkTaskContext.class);
-    when(sinkTaskContext.assignment()).thenReturn(Collections.emptySet());
 
     BigQuerySinkTask testTask = new BigQuerySinkTask(bigQuery);
     testTask.initialize(sinkTaskContext);
@@ -263,20 +259,16 @@ public class BigQuerySinkTaskTest {
     final String topic = "test_topic";
 
     Map<String, String> properties = propertiesFactory.getProperties();
-    properties.put(BigQuerySinkTaskConfig.BUFFER_SIZE_CONFIG, "-1");
-    properties.put(BigQuerySinkTaskConfig.BATCH_WRITER_CONFIG,
-                   SingleBatchWriter.class.getCanonicalName());
     properties.put(BigQuerySinkConfig.TOPICS_CONFIG, topic);
     properties.put(BigQuerySinkConfig.DATASETS_CONFIG, String.format(".*=%s", dataset));
 
     BigQuery bigQuery  = mock(BigQuery.class);
     InsertAllResponse fakeResponse = mock(InsertAllResponse.class);
     when(fakeResponse.hasErrors()).thenReturn(false);
-    when(fakeResponse.insertErrors()).thenReturn(Collections.emptyMap());
+    when(fakeResponse.getInsertErrors()).thenReturn(Collections.emptyMap());
     when(bigQuery.insertAll(any(InsertAllRequest.class))).thenReturn(fakeResponse);
 
     SinkTaskContext sinkTaskContext = mock(SinkTaskContext.class);
-    when(sinkTaskContext.assignment()).thenReturn(Collections.emptySet());
     BigQuerySinkTask testTask = new BigQuerySinkTask(bigQuery);
     testTask.initialize(sinkTaskContext);
     testTask.start(properties);
@@ -320,9 +312,9 @@ public class BigQuerySinkTaskTest {
   public static InsertAllRequest buildExpectedInsertAllRequest(
       TableId table,
       InsertAllRequest.RowToInsert... rows) {
-    return InsertAllRequest.builder(table, rows)
-        .ignoreUnknownValues(false)
-        .skipInvalidRows(false)
+    return InsertAllRequest.newBuilder(table, rows)
+        .setIgnoreUnknownValues(false)
+        .setSkipInvalidRows(false)
         .build();
   }
 
